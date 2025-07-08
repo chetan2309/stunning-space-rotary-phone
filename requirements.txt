@@ -1,1 +1,12 @@
+# ---
+# File: requirements.txt
+# This file lists the Python libraries needed for the project.
+
 Flask==2.3.2
+gunicorn
+testrail-api
+PyGithub
+transformers
+torch
+sentence-transformers
+chromadb
