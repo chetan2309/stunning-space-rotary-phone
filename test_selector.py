@@ -17,7 +17,7 @@ from sentence_transformers import SentenceTransformer
 DB_PATH = "testrail_db" # The local directory where the DB is stored
 COLLECTION_NAME = "testrail_embeddings"
 MODEL_NAME = 'all-MiniLM-L6-v2'
-NUM_TESTS_TO_SUGGEST = 3
+NUM_TESTS_TO_SUGGEST = 10
 
 def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_url):
     """
@@ -26,10 +26,17 @@ def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_
     g = Github(github_token)
     repo = g.get_repo(repo_name)
     pr = repo.get_pull(pr_number)
+    print("Entire pr body is ", pr)
+    print("Entire pr body via repo is ", repo)
     
     # 1. Get code changes from the PR.
+    # Include the PR body for more context.
+    pr_body = pr.body if pr.body else ""
+    code_text = f"Pull Request Title: {pr.title}\n\nPull Request Description: {pr_body}\n\n"
+    print("Code text is", code_text)
+
     files = pr.get_files()
-    code_text = f"Pull Request Title: {pr.title}\n\n"
+    #code_text = f"Pull Request Title: {pr.title}\n\n"
     relevant_files_changed = False
     for file in files:
         if file.filename.endswith(('.js', '.jsx', '.vue', '.ts', '.tsx')):
@@ -48,10 +55,31 @@ def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_
     print("Analyzing code and querying for tests...")
     query_embedding = model.encode(code_text).tolist()
     results = collection.query(query_embeddings=[query_embedding], n_results=NUM_TESTS_TO_SUGGEST)
+    print(results)
     
     selected_tests = []
-    if results and results.get('metadatas') and results['metadatas'][0]:
-        selected_tests = [{"id": meta['case_id'], "title": meta['title']} for meta in results['metadatas'][0]]
+    SIMILARITY_THRESHOLD = 0.7
+    #if results and results.get('metadatas') and results['metadatas'][0]:
+    #    selected_tests = [{"id": meta['case_id'], "title": meta['title']} for meta in results['metadatas'][0]]
+    # Filter results by distance threshold
+    #if results and results.get('ids')[0]:
+    #    for i, distance in enumerate(results['distances'][0]):
+    #        if distance < DISTANCE_THRESHOLD:
+    #            print("Distance is lless than threshold", distance)
+    #            meta = results['metadatas'][0][i]
+    #            selected_tests.append({"id": meta['case_id'], "title": meta['title']})
+    
+    # --- UPDATED FILTERING LOGIC ---
+    # The 'distances' field will now contain cosine similarity scores.
+    # We want scores *above* the threshold.
+    if results and results.get('ids')[0]:
+        # ChromaDB still calls it 'distances', but it's now a similarity score.
+        scores = results['distances'][0]
+        for i, score in enumerate(scores):
+            if score > SIMILARITY_THRESHOLD: # Higher is better!
+                meta = results['metadatas'][0][i]
+                selected_tests.append({"id": meta['case_id'], "title": meta['title']})
+    # --- END UPDATED LOGIC ---
 
     # 3. Format the comment to be posted on GitHub.
     comment = "🤖 **Intelligent Test Case Suggestion** 🤖\n\n"

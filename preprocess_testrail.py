@@ -16,9 +16,13 @@ from testrail_api import TestRailAPI
 
 # --- Configuration ---
 # Load from environment variables for security
-TESTRAIL_URL = os.getenv("TESTRAIL_URL")
-TESTRAIL_USER = os.getenv("TESTRAIL_USER")
-TESTRAIL_PASSWORD = os.getenv("TESTRAIL_PASSWORD")
+#TESTRAIL_URL = os.getenv("TESTRAIL_URL")
+#TESTRAIL_USER = os.getenv("TESTRAIL_USER")
+#TESTRAIL_PASSWORD = os.getenv("TESTRAIL_PASSWORD")
+TESTRAIL_URL="https://myrodeotwo.testrail.io"
+TESTRAIL_USER="santavant2@gmail.com"
+TESTRAIL_PASSWORD="pTRh0krr5AtiA7rRj2.H-h8lkrI5nNCfI5SdchROr"
+TESTRAIL_PROJECT_ID="1"
 PROJECT_ID = 1 # IMPORTANT: Change to your TestRail project's ID
 
 DB_PATH = "testrail_db"
@@ -49,7 +53,8 @@ def create_testrail_embeddings():
 
     model = SentenceTransformer(MODEL_NAME)
     client = chromadb.PersistentClient(path=DB_PATH)
-    collection = client.get_or_create_collection(name=COLLECTION_NAME)
+    collection = client.get_or_create_collection(name=COLLECTION_NAME, 
+                                                 metadata={"hnsw:space": "cosine"})
 
     documents, metadatas, ids = [], [], []
     for case in cases_list:

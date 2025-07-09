@@ -16,7 +16,8 @@ app = Flask(__name__)
 
 # --- Configuration ---
 # These will be loaded from the hosting environment (Render).
-SECRET_TOKEN = os.getenv("SECRET_TOKEN")
+#SECRET_TOKEN = os.getenv("SECRET_TOKEN")
+SECRET_TOKEN = "my-super-secret-password-12345"
 TESTRAIL_URL = os.getenv("TESTRAIL_URL")
 
 @app.route('/')
@@ -30,6 +31,8 @@ def analyze_webhook():
     
     # 1. Security Check: Ensure the request is from our GitHub Action.
     request_token = request.headers.get('X-Secret-Token')
+    print("request_token is = ", request_token)
+    print("SECRET_TOKEN is = ", SECRET_TOKEN)
     if not request_token or request_token != SECRET_TOKEN:
         print("Unauthorized attempt blocked.")
         return jsonify({"error": "Unauthorized"}), 403
