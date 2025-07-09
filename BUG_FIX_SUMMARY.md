@@ -125,13 +125,15 @@ Reasoning: "Authentication-related code and test"
 
 ## Usage Examples
 
-### With OpenAI API Key
+### With Azure OpenAI (Recommended)
 ```bash
-export OPENAI_API_KEY="your-key-here"
-python3 app.py  # Uses GPT for semantic evaluation
+export AZURE_OPENAI_KEY="your-azure-key"
+export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+export AZURE_OPENAI_DEPLOYMENT="gpt-35-turbo"
+python3 app.py  # Uses Azure OpenAI for semantic evaluation
 ```
 
-### Without API Key (Fallback)
+### Without LLM (Fallback)
 ```bash
 python3 app.py  # Uses heuristic keyword matching
 ```

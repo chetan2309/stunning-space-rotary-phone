@@ -30,13 +30,20 @@ def evaluate_test_relevance_with_llm(code_changes, test_case):
     Returns a relevance score (0-100) and reasoning.
     """
     try:
-        # Set up OpenAI client (fallback to a simple heuristic if no API key)
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            print("Warning: No OPENAI_API_KEY found, using fallback heuristic evaluation")
+        # Set up Azure OpenAI client (fallback to a simple heuristic if no API key)
+        azure_openai_key = os.getenv("AZURE_OPENAI_KEY")
+        azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        azure_openai_version = os.getenv("AZURE_OPENAI_VERSION", "2024-02-15-preview")
+        
+        if not azure_openai_key or not azure_openai_endpoint:
+            print("Warning: No AZURE_OPENAI_KEY or AZURE_OPENAI_ENDPOINT found, using fallback heuristic evaluation")
             return evaluate_test_relevance_fallback(code_changes, test_case)
         
-        client = openai.OpenAI(api_key=openai_api_key)
+        client = openai.AzureOpenAI(
+            api_key=azure_openai_key,
+            api_version=azure_openai_version,
+            azure_endpoint=azure_openai_endpoint
+        )
         
         prompt = f"""You are an expert QA engineer evaluating test case relevance.
 
@@ -64,8 +71,11 @@ Example response:
 {{"relevance_score": 85, "reasoning": "This login test is highly relevant because the code changes modify authentication validation logic", "recommendation": "include"}}
 """
 
+        # Use your Azure OpenAI deployment name here
+        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-35-turbo")
+        
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=deployment_name,  # This should match your Azure deployment name
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=300
