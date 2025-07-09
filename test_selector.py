@@ -12,12 +12,119 @@ except ImportError:
 import chromadb
 from github import Github
 from sentence_transformers import SentenceTransformer
+import openai
+import os
+import json
 
 # --- Configuration ---
 DB_PATH = "testrail_db" # The local directory where the DB is stored
 COLLECTION_NAME = "testrail_embeddings"
 MODEL_NAME = 'all-MiniLM-L6-v2'
-NUM_TESTS_TO_SUGGEST = 3
+NUM_CANDIDATES = 10  # Retrieve more candidates for LLM evaluation
+RELEVANCE_THRESHOLD = 35  # LLM relevance score threshold (0-100) - conservative but practical
+MAX_SUGGESTIONS = 3  # Maximum number of test suggestions to return
+
+def evaluate_test_relevance_with_llm(code_changes, test_case):
+    """
+    Use LLM to evaluate if a test case is relevant to the code changes.
+    Returns a relevance score (0-100) and reasoning.
+    """
+    try:
+        # Set up OpenAI client (fallback to a simple heuristic if no API key)
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            print("Warning: No OPENAI_API_KEY found, using fallback heuristic evaluation")
+            return evaluate_test_relevance_fallback(code_changes, test_case)
+        
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        prompt = f"""You are an expert QA engineer evaluating test case relevance.
+
+CODE CHANGES:
+{code_changes}
+
+TEST CASE:
+ID: {test_case['id']}
+Title: {test_case['title']}
+Description: {test_case.get('description', 'No description available')}
+
+TASK: Evaluate if this test case is relevant to the code changes above.
+
+Consider:
+- Does the test case cover functionality that could be affected by these changes?
+- Are there semantic relationships between the code and test areas?
+- Would running this test help validate the changes work correctly?
+
+Respond with a JSON object containing:
+- "relevance_score": integer from 0-100 (0=completely irrelevant, 100=highly relevant)
+- "reasoning": string explaining your evaluation
+- "recommendation": "include" or "exclude"
+
+Example response:
+{{"relevance_score": 85, "reasoning": "This login test is highly relevant because the code changes modify authentication validation logic", "recommendation": "include"}}
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=300
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result
+        
+    except Exception as e:
+        print(f"LLM evaluation failed: {e}, using fallback")
+        return evaluate_test_relevance_fallback(code_changes, test_case)
+
+def evaluate_test_relevance_fallback(code_changes, test_case):
+    """
+    Fallback heuristic evaluation when LLM is not available.
+    """
+    code_lower = code_changes.lower()
+    title_lower = test_case['title'].lower()
+    
+    # Simple keyword matching heuristics
+    relevance_score = 0
+    reasoning_parts = []
+    
+    # Authentication/Login related
+    auth_keywords = ['login', 'auth', 'password', 'username', 'signin', 'credential', 'validate']
+    if any(keyword in code_lower for keyword in auth_keywords):
+        if any(keyword in title_lower for keyword in auth_keywords):
+            relevance_score += 50
+            reasoning_parts.append("authentication-related code and test")
+    
+    # Registration related
+    reg_keywords = ['register', 'signup', 'registration', 'create account']
+    if any(keyword in code_lower for keyword in reg_keywords):
+        if any(keyword in title_lower for keyword in reg_keywords):
+            relevance_score += 40
+            reasoning_parts.append("registration-related code and test")
+    
+    # UI/Frontend related
+    ui_keywords = ['button', 'form', 'input', 'click', 'submit', 'validate']
+    if any(keyword in code_lower for keyword in ui_keywords):
+        if any(keyword in title_lower for keyword in ui_keywords):
+            relevance_score += 30
+            reasoning_parts.append("UI interaction code and test")
+    
+    # Penalize irrelevant combinations
+    css_keywords = ['css', 'style', 'color', 'font', 'padding', 'margin']
+    if any(keyword in code_lower for keyword in css_keywords):
+        if not any(keyword in title_lower for keyword in ['style', 'ui', 'display']):
+            relevance_score = max(0, relevance_score - 30)
+            reasoning_parts.append("CSS changes unlikely to affect functional tests")
+    
+    reasoning = f"Heuristic evaluation based on: {', '.join(reasoning_parts) if reasoning_parts else 'no clear keyword matches'}"
+    recommendation = "include" if relevance_score >= RELEVANCE_THRESHOLD else "exclude"
+    
+    return {
+        "relevance_score": min(100, relevance_score),
+        "reasoning": reasoning,
+        "recommendation": recommendation
+    }
 
 def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_url):
     """
@@ -39,29 +146,68 @@ def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_
     if not relevant_files_changed:
         return "No relevant front-end code changes found in this PR."
 
-    # 2. Find relevant tests in our vector database.
+    # 2. Find candidate tests using embeddings (retrieval phase)
     print("Loading model and connecting to DB...")
     model = SentenceTransformer(MODEL_NAME)
     client = chromadb.PersistentClient(path=DB_PATH)
     collection = client.get_collection(name=COLLECTION_NAME)
     
-    print("Analyzing code and querying for tests...")
+    print(f"Retrieving {NUM_CANDIDATES} candidate tests using embeddings...")
     query_embedding = model.encode(code_text).tolist()
-    results = collection.query(query_embeddings=[query_embedding], n_results=NUM_TESTS_TO_SUGGEST)
+    results = collection.query(query_embeddings=[query_embedding], n_results=NUM_CANDIDATES)
     
-    selected_tests = []
+    # 3. Use LLM to evaluate relevance of each candidate (evaluation phase)
+    print("Evaluating test relevance with LLM...")
+    evaluated_tests = []
+    
     if results and results.get('metadatas') and results['metadatas'][0]:
-        selected_tests = [{"id": meta['case_id'], "title": meta['title']} for meta in results['metadatas'][0]]
+        for i, meta in enumerate(results['metadatas'][0]):
+            test_case = {
+                'id': meta['case_id'],
+                'title': meta['title'],
+                'description': meta.get('description', ''),
+                'embedding_rank': i + 1,
+                'embedding_distance': results['distances'][0][i] if results.get('distances') else None
+            }
+            
+            print(f"  Evaluating T{test_case['id']}: {test_case['title']}")
+            evaluation = evaluate_test_relevance_with_llm(code_text, test_case)
+            
+            test_case.update({
+                'relevance_score': evaluation['relevance_score'],
+                'reasoning': evaluation['reasoning'],
+                'recommendation': evaluation['recommendation']
+            })
+            
+            evaluated_tests.append(test_case)
+    
+    # 4. Filter by LLM relevance threshold and sort by relevance score
+    selected_tests = [
+        test for test in evaluated_tests 
+        if test['relevance_score'] >= RELEVANCE_THRESHOLD
+    ]
+    
+    # Sort by relevance score (highest first) and limit results
+    selected_tests.sort(key=lambda x: x['relevance_score'], reverse=True)
+    selected_tests = selected_tests[:MAX_SUGGESTIONS]
+    
+    print(f"Selected {len(selected_tests)} tests above {RELEVANCE_THRESHOLD}% relevance threshold")
 
-    # 3. Format the comment to be posted on GitHub.
+    # 5. Format the comment to be posted on GitHub.
     comment = "🤖 **Intelligent Test Case Suggestion** 🤖\n\n"
     if selected_tests:
-        comment += "Based on the code changes, the QA team should consider manually running:\n\n"
+        comment += f"Based on AI analysis of the code changes, I found **{len(selected_tests)}** highly relevant test case(s):\n\n"
         for test in selected_tests:
             case_url = f"{testrail_url}index.php?/cases/view/{test['id']}"
             comment += f"- **T{test['id']}**: [{test['title']}]({case_url})\n"
+            comment += f"  - **Relevance**: {test['relevance_score']}%\n"
+            comment += f"  - **Reasoning**: {test['reasoning']}\n\n"
+        
+        comment += f"*Note: Only tests with ≥{RELEVANCE_THRESHOLD}% AI-evaluated relevance are suggested. "
+        comment += f"This uses embeddings for retrieval + LLM for semantic evaluation.*"
     else:
-        comment += "I could not find any existing test cases in TestRail that seem relevant to these changes. Please consider if a new test case is needed."
+        comment += f"After AI analysis, I could not find any existing test cases in TestRail that are sufficiently relevant to these changes (threshold: {RELEVANCE_THRESHOLD}% relevance). "
+        comment += "The changes may be in areas not covered by existing tests, or may be low-risk changes like styling. Please consider if new test cases are needed."
     
     # 4. Post the comment back to the PR.
     print("Posting comment to PR...")
