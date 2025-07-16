@@ -16,7 +16,8 @@ app = Flask(__name__)
 
 # --- Configuration ---
 # These will be loaded from the hosting environment (Render).
-SECRET_TOKEN = os.getenv("SECRET_TOKEN")
+#SECRET_TOKEN = os.getenv("SECRET_TOKEN")
+SECRET_TOKEN="my-super-secret-password-12345"
 TESTRAIL_URL = os.getenv("TESTRAIL_URL")
 
 @app.route('/')

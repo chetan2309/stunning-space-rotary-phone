@@ -16,10 +16,16 @@ from testrail_api import TestRailAPI
 
 # --- Configuration ---
 # Load from environment variables for security
-TESTRAIL_URL = os.getenv("TESTRAIL_URL")
-TESTRAIL_USER = os.getenv("TESTRAIL_USER")
-TESTRAIL_PASSWORD = os.getenv("TESTRAIL_PASSWORD")
-PROJECT_ID = 1 # IMPORTANT: Change to your TestRail project's ID
+#TESTRAIL_URL = os.getenv("TESTRAIL_URL")
+#TESTRAIL_USER = os.getenv("TESTRAIL_USER")
+#TESTRAIL_PASSWORD = os.getenv("TESTRAIL_PASSWORD")
+#PROJECT_ID = 1 # IMPORTANT: Change to your TestRail project's ID
+
+TESTRAIL_URL="https://myrodeotwo.testrail.io"
+TESTRAIL_USER="santavant2@gmail.com"
+TESTRAIL_PASSWORD="pTRh0krr5AtiA7rRj2.H-h8lkrI5nNCfI5SdchROr"
+TESTRAIL_PROJECT_ID="1"
+PROJECT_ID = 1 
 
 DB_PATH = "testrail_db"
 COLLECTION_NAME = "testrail_embeddings"
@@ -49,25 +55,44 @@ def create_testrail_embeddings():
 
     model = SentenceTransformer(MODEL_NAME)
     client = chromadb.PersistentClient(path=DB_PATH)
+
+    # Delete existing collection and create new one
+    try:
+        client.delete_collection(name=COLLECTION_NAME)
+        print("🗑️  Deleted existing collection")
+    except:
+        print("ℹ️  No existing collection to delete")
     collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
     documents, metadatas, ids = [], [], []
     for case in cases_list:
         # *** FIX: Handle cases where 'custom_steps_separated' might be None ***
-        steps = case.get('custom_steps_separated') # Can be None if no steps exist
-        steps_text = "" # Default to an empty string
+        steps = case.get('custom_steps') # Can be None if no steps exist
+
+        # Why I commented this line
+        # Right now steps are coming in field as text with discussion with Dheeraj.
+        # So we are treating it as a text for right now
+        #steps_text = "" # Default to an empty string
         
         # Only process steps if the 'steps' variable is a list (not None)
-        if steps:
-            # Safely get content from each step, providing an empty string if 'content' is missing
-            steps_text = " ".join([step.get('content', '') for step in steps if step])
+        #if steps:
+        #    # Safely get content from each step, providing an empty string if 'content' is missing
+        #    steps_text = " ".join([step.get('content', '') for step in steps if step])
         
         # Safely get the title
         title = case.get('title', 'No Title Provided')
-        full_text = f"Title: {title}. Steps: {steps_text}"
+        #full_text = f"Title: {title}. Steps: {steps_text}"
+
+        expected_results = case.get('custom_expected') # For now we are treating it as a string
         
-        documents.append(full_text)
-        metadatas.append({"case_id": case.get('id'), "title": title})
+        #full_text = f"Title: {title}. Steps: {steps} Expected Results: {expected_results}"
+        documents.append(f"{title} {steps} {expected_results}")  # Simple concatenation
+        metadatas.append({
+            "case_id": case.get('id'),
+            "title": title, 
+            "custom_steps": steps,
+            "custom_expected": expected_results
+        })
         ids.append(str(case.get('id')))
 
     print(f"Generating embeddings for {len(documents)} test cases...")

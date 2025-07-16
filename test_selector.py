@@ -24,6 +24,11 @@ NUM_CANDIDATES = 10  # Retrieve more candidates for LLM evaluation
 RELEVANCE_THRESHOLD = 35  # LLM relevance score threshold (0-100) - conservative but practical
 MAX_SUGGESTIONS = 3  # Maximum number of test suggestions to return
 
+AZURE_OPENAI_KEY="5366f9c0121f4852afeb69388c2aff3a"
+AZURE_OPENAI_ENDPOINT="https://agtech-llm-openai.openai.azure.com/"
+AZURE_OPENAI_VERSION="2024-12-01-preview"
+AZURE_OPENAI_DEPLOYMENT="o3"
+
 def evaluate_test_relevance_with_llm(code_changes, test_case):
     """
     Use LLM to evaluate if a test case is relevant to the code changes.
@@ -31,9 +36,9 @@ def evaluate_test_relevance_with_llm(code_changes, test_case):
     """
     try:
         # Set up Azure OpenAI client (fallback to a simple heuristic if no API key)
-        azure_openai_key = os.getenv("AZURE_OPENAI_KEY")
-        azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        azure_openai_version = os.getenv("AZURE_OPENAI_VERSION", "2024-02-15-preview")
+        azure_openai_key = AZURE_OPENAI_KEY
+        azure_openai_endpoint = AZURE_OPENAI_ENDPOINT
+        azure_openai_version = AZURE_OPENAI_VERSION
         
         if not azure_openai_key or not azure_openai_endpoint:
             print("Warning: No AZURE_OPENAI_KEY or AZURE_OPENAI_ENDPOINT found, using fallback heuristic evaluation")
@@ -45,15 +50,22 @@ def evaluate_test_relevance_with_llm(code_changes, test_case):
             azure_endpoint=azure_openai_endpoint
         )
         
-        prompt = f"""You are an expert QA engineer evaluating test case relevance.
+        prompt = f"""You are an expert QA engineer tasked with evaluating the relevance of test cases in relation to code changes in a pull request. Your goal is to determine whether a given test case should be included or excluded based on its relevance to the code changes.
+        First, review the following information about the pull request:
 
+First, review the following information about the pull request and the code changes:
 CODE CHANGES:
 {code_changes}
 
 TEST CASE:
 ID: {test_case['id']}
-Title: {test_case['title']}
-Description: {test_case.get('description', 'No description available')}
+Test case description: {test_case['title']}
+
+Steps:
+{test_case['steps']}
+
+Expected Result:
+{test_case['expected_result']}
 
 TASK: Evaluate if this test case is relevant to the code changes above.
 
@@ -72,21 +84,23 @@ Example response:
 """
 
         # Use your Azure OpenAI deployment name here
-        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-35-turbo")
-        
+        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT", AZURE_OPENAI_DEPLOYMENT)
+        #print("Prompt for the test case is ", prompt)
         response = client.chat.completions.create(
             model=deployment_name,  # This should match your Azure deployment name
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=300
+            max_completion_tokens=300
         )
-        
+        print(response.choices[0].message.content)
         result = json.loads(response.choices[0].message.content)
+        print('-----------------------------------------')
+        print(result)
         return result
         
     except Exception as e:
-        print(f"LLM evaluation failed: {e}, using fallback")
-        return evaluate_test_relevance_fallback(code_changes, test_case)
+        print("Eval failed", e)
+        #print(f"LLM evaluation failed: {e}, using fallback")
+        #return evaluate_test_relevance_fallback(code_changes, test_case)
 
 def evaluate_test_relevance_fallback(code_changes, test_case):
     """
@@ -146,7 +160,7 @@ def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_
     
     # 1. Get code changes from the PR.
     files = pr.get_files()
-    code_text = f"Pull Request Title: {pr.title}\n\n"
+    code_text = f"Pull Request Title: {pr.title}\n\n Pull Request description: {pr.body}"
     relevant_files_changed = False
     for file in files:
         if file.filename.endswith(('.js', '.jsx', '.vue', '.ts', '.tsx')):
@@ -165,6 +179,8 @@ def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_
     print(f"Retrieving {NUM_CANDIDATES} candidate tests using embeddings...")
     query_embedding = model.encode(code_text).tolist()
     results = collection.query(query_embeddings=[query_embedding], n_results=NUM_CANDIDATES)
+    #print("Results are these.......................")
+    #print(results)
     
     # 3. Use LLM to evaluate relevance of each candidate (evaluation phase)
     print("Evaluating test relevance with LLM...")
@@ -175,14 +191,14 @@ def analyze_pr_and_get_suggestions(repo_name, pr_number, github_token, testrail_
             test_case = {
                 'id': meta['case_id'],
                 'title': meta['title'],
-                'description': meta.get('description', ''),
+                'steps': meta.get('custom_steps', ''),
+                "expected_result": meta.get('custom_expected', ''),
                 'embedding_rank': i + 1,
                 'embedding_distance': results['distances'][0][i] if results.get('distances') else None
             }
             
-            print(f"  Evaluating T{test_case['id']}: {test_case['title']}")
+            print(f"  Evaluating C{test_case['id']}: {test_case['title']}")
             evaluation = evaluate_test_relevance_with_llm(code_text, test_case)
-            
             test_case.update({
                 'relevance_score': evaluation['relevance_score'],
                 'reasoning': evaluation['reasoning'],
